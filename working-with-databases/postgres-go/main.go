@@ -42,20 +42,20 @@ func main() {
 	}
 	fmt.Printf("all album : %v\n", albums)
 
-	albumNo1, err := application.AlbumService.Get(1)
+	albumNo1, err := application.AlbumService.Get(2)
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("album number 1 : %v\n", albumNo1)
 
-	// err = application.AlbumService.BatchCreate([]services.Album{
-	// 	{Title: "Hari Yang Cerah", Artist: "Peterpan", Price: 50000},
-	// 	{Title: "Sebuah Nama Sebuah Cerita", Artist: "Peterpan", Price: 50000},
-	// 	{Title: "Bintang Di surga", Artist: "Peterpan", Price: 60000},
-	// })
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	err = application.AlbumService.BatchCreate([]services.Album{
+		{Title: "Hari Yang Cerah", Artist: "Peterpan", Price: 50000},
+		{Title: "Sebuah Nama Sebuah Cerita", Artist: "Peterpan", Price: 50000},
+		{Title: "Bintang Di surga", Artist: "Peterpan", Price: 60000},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	albumNo1.Price = 70000
 	err = application.AlbumService.Update(*albumNo1)

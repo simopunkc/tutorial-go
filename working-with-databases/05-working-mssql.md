@@ -1,44 +1,66 @@
-# Working Postgres Database
+# Working with MS SQL Server Database
 
 ## Dependency
-Pastikan sudah buat projek dengan `go mod init postgres-go` pada folder `postgres-go` dan dependency yang akan kita pakai yaitu menggunakan
+Pastikan sudah buat projek dengan `go mod init mssql-go` pada folder `mssql-go` dan dependency yang akan kita pakai yaitu menggunakan
 ```go
-import _ "github.com/lib/pq"
+import _ "github.com/microsoft/go-mssqldb"
 ```
 Jika belum ada bisa kita coba download terlebih dahulu dependency diatas dengan cara perintah dibawah ini.
 ```bash
-go get github.com/lib/pg
+go get github.com/microsoft/go-mssqldb
+```
+
+Install MS SQL Server dan buat database dengan nama `recordings` dan juga tabel `album` untuk kebutuhan pada projek ini. Jika kamu tidak memiliki SQL Server Database maka kita perlu install terlebih dahulu. Bisa juga kamu menggunakan Docker untuk instalasinya.
+
+Jika kita pakai Mackbook M1 bisa juga menggunakan Docker dibawah ini
+```bash
+docker run -e "ACCEPT_EULA=1" -e "MSSQL_SA_PASSWORD=MyPass@word" -e "MSSQL_PID=Developer" -e "MSSQL_USER=SA" -p 1433:1433 -d --name=sql mcr.microsoft.com/azure-sql-edge
+```
+
+Lalu untuk lebih mudah melakukan akses ke dalam database MS SQL bisa install plugin [VS Code MS SQL Connection](https://marketplace.visualstudio.com/items?itemName=ms-mssql.mssql)
+
+## Schema Database
+Setelah install mssql sudah selesai dan kita bisa connection ke SQL Server-nya saatnya kita lanjutkan dengan menyiapkan database dan table-nya berikut ini schema yang kita akan butuhkan.
+```sql
+CREATE schema dbo
+GO
+CREATE TABLE album(
+  id INT IDENTITY(1,1) PRIMARY KEY,
+  title NVARCHAR(255),
+  artist NVARCHAR(255),
+  price INT
+)
+GO
 ```
 
 ## Buat Fungsi Koneksi Database
 Pada pembuatan fungsi koneksi database ini kita akan menggunakan fungsi dari sql yang mana sudah disiapkan oleh library `go`. Mari kita buat fungsi koneksi database ini dengan mengembalikan return `db` connection.
 ```go
-func openDB(dsn string, setLimits bool) (*sql.DB, error) {
-	db, err := sql.Open("postgres", dsn)
+func openDB(connString string, setLimits bool) (*sql.DB, error) {
+	var err error
+	db, err := sql.Open("sqlserver", connString)
 	if err != nil {
-		return nil, err
+		log.Fatal("Error creating connection pool: ", err.Error())
 	}
 
 	if setLimits {
 		fmt.Println("setting limits")
-		db.SetMaxOpenConns(5)
 		db.SetMaxIdleConns(5)
+		db.SetMaxOpenConns(5)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
+	ctx := context.Background()
 	err = db.PingContext(ctx)
 	if err != nil {
-		return nil, err
+		log.Fatal(err.Error())
 	}
-
+	fmt.Printf("Connected!\n")
 	return db, nil
 }
 ```
-Pada fungsi koneksi ini kita menggunakan `sql.Open` untuk melakukan koneksi database `Postgres` yang mana kita juga menerima parameter dari fungsi utama itu `dsn` yang berisi server lokasi, user, password dan database yang dituju.
+Pada fungsi koneksi ini kita menggunakan `sql.Open` untuk melakukan koneksi database `` yang mana kita juga menerima parameter dari fungsi utama itu `dsn` yang berisi server lokasi, user, password dan database yang dituju.
 ```go
-db, err := sql.Open("postgres", dsn)
+db, err := sql.Open("sqlserver", dsn)
 ```
 
 Lalu kita juga memberikan beberapa konfigurasi untuk memastikan koneksi ini memiliki `SetMaxOpenConns` Koneksi saat kita jalankan service ini dan juga `SetMaxIdleConns` kita set untuk memastikan koneksi kita tidak salah konfigurasi dan berjalan dengan normal.
@@ -94,31 +116,31 @@ type AlbumService interface {
 ```
 
 ### Mengamnbil Data Album by Id
-Mari kita buat fungsi yang nantinya bisa mengambil data dari database postgres. Sebelum ke fungsi yang terkait kita perlu definisikan terlebih dahulu fungsi-fungsi yang ada dengan menyertakan koneksi database yang sudah kita definisikan di awal.
+Mari kita buat fungsi yang nantinya bisa mengambil data dari database SQL Server. Sebelum ke fungsi yang terkait kita perlu definisikan terlebih dahulu fungsi-fungsi yang ada dengan menyertakan koneksi database yang sudah kita definisikan di awal.
 ```go
-type PostgresService struct {
+type MSSQLService struct {
 	db *sql.DB
 }
 
-func NewPostgresService(db *sql.DB) *PostgresService {
-	return &PostgresService{db: db}
+func NewMSSQLService(db *sql.DB) *MSSQLService {
+	return &MSSQLService{db: db}
 }
 ```
 
 Inisialisasi ini kita gunakan agar bisa kita membuat fungsi yang mengambil data ke dalam database itu dengan koneksi yang sudah ada. Lalu selanjutnya mari kita buat fungsi dari mengambil data album mengunakan parameter `id`.
 ```go
-func (p *PostgresService) Get(id int64) (*Album, error) {
+func (p *MSSQLService) Get(id int64) (*Album, error) {
 	query := `
         SELECT id, title, artist, price
-        FROM public.album
-        WHERE id = $1`
+        FROM dbo.album
+        WHERE id = @id`
 
 	var album Album
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	err := p.db.QueryRowContext(ctx, query, id).Scan(
+	err := p.db.QueryRowContext(ctx, query, sql.Named("id", id)).Scan(
 		&album.ID,
 		&album.Title,
 		&album.Artist,
@@ -136,9 +158,9 @@ func (p *PostgresService) Get(id int64) (*Album, error) {
 Pada fungsi diatas itu kita melihat buat query ke dalam database seperti dibawah ini.
 ```go
 query := `
-        SELECT id, title, artist, price
-        FROM public.album
-        WHERE id = $1`
+  SELECT id, title, artist, price
+  FROM dbo.album
+  WHERE id = @id`
 ```
 
 Lalu kita juga pastikan bahwa query tersebut perlu `timeout` agar tidak terlalu lama mengambil data ke dalam database. Pada program ini kita menggunakan timeout 15 second.
@@ -149,12 +171,12 @@ defer cancel()
 
 Selanjutnya kita juga menggunakan perintah `QueryRowContext` untuk mengambil datanya setelah kita inisialisasi koneksi ke database.
 ```go
-err := p.db.QueryRowContext(ctx, query, id).Scan(
-		&album.ID,
-		&album.Title,
-		&album.Artist,
-		&album.Price,
-	)
+err := p.db.QueryRowContext(ctx, query, sql.Named("id", id)).Scan(
+  &album.ID,
+  &album.Title,
+  &album.Artist,
+  &album.Price,
+)
 ```
 
 Perintah `QueryRowContext` ini digunaakn untuk mengambil data dari database dengan mengembalikan hanya satu baris data saja. Selanjutnya jika datanya ada maka akan kita simpan data tersebut ke dalam variabel `album`.
@@ -162,41 +184,50 @@ Perintah `QueryRowContext` ini digunaakn untuk mengambil data dari database deng
 ### Menyimpan Data Album ke Database
 Selain kita mengambil data dari database, kita juga harus bisa mengirim data dari sistem ke dalam database. Berikut ini kita akan membuat fungsi `create`.
 ```go
-func (p *PostgresService) Create(album *Album) error {
+func (p *MSSQLService) Create(album *Album) error {
 	query := `
-        INSERT INTO public.album (id, title, artist, price) 
-        VALUES ($1, $2, $3, $4)
-        RETURNING id`
+        INSERT INTO dbo.album (title, artist, price) 
+        VALUES (@title, @artist, @price)`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	return p.db.QueryRowContext(ctx, query, album.Title, album.Artist, album.Price).Scan(&album.ID)
+	_, err := p.db.ExecContext(ctx, query,
+		sql.Named("title", album.Title),
+		sql.Named("artist", album.Artist),
+		sql.Named("price", album.Price))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 ```
 
 Seperti biasa karena ini termasuk ke dalam native query yang mana kita menentukan query sendiri didalam kode maka kita perlu definisikan terlebih dahulu query-nya. Berikut ini query untuk insert data ke dalam database.
 ```go
 query := `
-  INSERT INTO public.album (id, title, artist, price) 
-  VALUES ($1, $2, $3, $4)
-  RETURNING id`
+      INSERT INTO dbo.album (title, artist, price) 
+      VALUES (@title, @artist, @price)`
 ```
 
 Lakukan set timeout agar lebih terjaga dan selanjutnya kita execute create disini kita menggunakan query sama seperti mengambil data karena kita akan mengambil id setelah ditambahkan.
 ```go
-return p.db.QueryRowContext(ctx, query, album.Title, album.Artist, album.Price).Scan(&album.ID)
+_, err := p.db.ExecContext(ctx, query,
+		sql.Named("title", album.Title),
+		sql.Named("artist", album.Artist),
+		sql.Named("price", album.Price))
 ```
 
 ### Mengambil Semua Data dalam Database
 Mari kita buat fungsi selanjutnya yaitu mengambil semua data dari database sebagai berikut.
 ```go
-func (p *PostgresService) GetAllAlbum() ([]Album, error) {
+func (p *MSSQLService) GetAllAlbum() ([]Album, error) {
 	query := `
 		SELECT id, title, artist, price
-		FROM album`
+		FROM dbo.album`
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	var albums []Album
@@ -263,7 +294,7 @@ Dan diakhiri dengan perintah `return albums, nil` pada fungsinya.
 ### Membuat Batch Tambah Album
 Pada fungsi ini kita akan membuat batching data yang mana kia mengirim data dengan jumlah lebih dari satu. Ini bisa kita gunakan untuk data-data yang kita kirim sekaligus. Mari kita lihat fungsinya yang akan kita buat.
 ```go
-func (p *PostgresService) BatchCreate(albums []Album) error {
+func (p *MSSQLService) BatchCreate(albums []Album) error {
 	tx, err := p.db.Begin()
 	if err != nil {
 		return err
@@ -273,10 +304,13 @@ func (p *PostgresService) BatchCreate(albums []Album) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	query := `INSERT INTO album (title, artist, price) VALUES ($1, $2, $3)`
+	query := `INSERT INTO dbo.album (title, artist, price) VALUES (@title, @artist, @price)`
 
 	for _, album := range albums {
-		_, err := tx.ExecContext(ctx, query, album.Title, album.Artist, album.Price)
+		_, err := tx.ExecContext(ctx, query,
+			sql.Named("title", album.Title),
+			sql.Named("artist", album.Artist),
+			sql.Named("price", album.Price))
 		if err != nil {
 			log.Printf("error execute insert err: %v", err)
 			continue
@@ -306,7 +340,10 @@ Fungsi `Begin()` digunakan untuk membuka transaksi dan diakhiri dengan `defer tx
 Selanjutnya kita lakukan perulangan untuk melakukan insert data ke dalam database.
 ```go
 for _, album := range albums {
-  _, err := tx.ExecContext(ctx, query, album.Title, album.Artist, album.Price)
+  _, err := tx.ExecContext(ctx, query,
+    sql.Named("title", album.Title),
+    sql.Named("artist", album.Artist),
+    sql.Named("price", album.Price))
   if err != nil {
     log.Printf("error execute insert err: %v", err)
     continue
@@ -325,12 +362,16 @@ if err != nil {
 ### Melakukan Ubah Data Album
 Melakukan perubahan dari satu data kita perlu membuat fungsi yang mengirimkan parameter `id` untuk menyeleksi data yang akan diubah. Berikut ini fungsi lengkapnya untuk mengubah album.
 ```go
-func (p *PostgresService) Update(album Album) error {
+func (p *MSSQLService) Update(album Album) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	query := `UPDATE album set title=$1, artist=$2, price=$3 WHERE id=$4`
-	result, err := p.db.ExecContext(ctx, query, album.Title, album.Artist, album.Price, album.ID)
+	query := `UPDATE dbo.album set title=@title, artist=@artist, price=@price WHERE id=@id`
+	result, err := p.db.ExecContext(ctx, query,
+		sql.Named("title", album.Title),
+		sql.Named("artist", album.Artist),
+		sql.Named("price", album.Price),
+		sql.Named("id", album.ID))
 	if err != nil {
 		return err
 	}
@@ -346,8 +387,12 @@ func (p *PostgresService) Update(album Album) error {
 ```
 Perintah `ExecContext` digunakan sama halnya dengan tambah karena operasi ini bisa kita gunakan asalkan query-nya untuk kebutuhan update dalam hal ini kita gunakan untuk update data.
 ```go
-query := `UPDATE album set title=$1, artist=$2, price=$3 WHERE id=$4`
-result, err := p.db.ExecContext(ctx, query, album.Title, album.Artist, album.Price, album.ID)
+query := `UPDATE dbo.album set title=@title, artist=@artist, price=@price WHERE id=@id`
+result, err := p.db.ExecContext(ctx, query,
+  sql.Named("title", album.Title),
+  sql.Named("artist", album.Artist),
+  sql.Named("price", album.Price),
+  sql.Named("id", album.ID))
 if err != nil {
   return err
 }
@@ -364,12 +409,12 @@ if err != nil {
 ## Menghapus data Album
 Operasi atau fungsi untuk menghapus data pada program ini kita menghapus satu persatu berdasarkan input parameter dari fungsi tersebut. Berikut fungsi lengkapnya.
 ```go
-func (p *PostgresService) Delete(id int64) error {
+func (p *MSSQLService) Delete(id int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	query := `DELETE from album WHERE id=$1`
-	result, err := p.db.ExecContext(ctx, query, id)
+	query := `DELETE from dbo.album WHERE id=@id`
+	result, err := p.db.ExecContext(ctx, query, sql.Named("id", id))
 	if err != nil {
 		return err
 	}
@@ -381,15 +426,16 @@ func (p *PostgresService) Delete(id int64) error {
 	fmt.Printf("Affected delete : %d", rows)
 	return nil
 }
+
 ```
 
 Pada fungsi ini kita memanggil `ExecContext` untuk menghapus data ke dalam database. Hal ini digunakan sama halnya seperti update dan insert.
 ```go
-query := `DELETE from album WHERE id=$1`
-result, err := p.db.ExecContext(ctx, query, id)
-if err != nil {
-  return err
-}
+query := `DELETE from dbo.album WHERE id=@id`
+	result, err := p.db.ExecContext(ctx, query, sql.Named("id", id))
+	if err != nil {
+		return err
+	}
 ```
 
 Dilanjutkan juga dengan perintah `RowsAffected()` agar memastikan data yang akan kita delete itu sukses atau tidak ditemukan pada database.
@@ -403,6 +449,7 @@ if err != nil {
 ## Melakukan inisialisasi module Service pada Main
 Setelah kita membuat program service yang mana kita membuat fungsi masing-masih untuk operasi ke dalam database saatnya kita mengintegrasikan semua tersebut ke dalam `main` program. Berikut ini main fungsi selengkapnya.
 ```go
+
 type app struct {
 	AlbumService services.AlbumService
 }
@@ -413,7 +460,7 @@ func main() {
 		log.Fatalf("Error loading .env file")
 	}
 
-	db, err := openDB(os.Getenv("POSTGRES_URL"), true)
+	db, err := openDB(os.Getenv("MSSQL_URL"), true)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -424,19 +471,7 @@ func main() {
 		}
 	}(db)
 
-	application := app{AlbumService: services.NewPostgresService(db)}
-
-	albums, err := application.AlbumService.GetAllAlbum()
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("all album : %v\n", albums)
-
-	albumNo1, err := application.AlbumService.Get(1)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("album number 1 : %v\n", albumNo1)
+	application := app{AlbumService: services.NewMSSQLService(db)}
 
 	err = application.AlbumService.BatchCreate([]services.Album{
 		{Title: "Hari Yang Cerah", Artist: "Peterpan", Price: 50000},
@@ -447,16 +482,66 @@ func main() {
 		log.Fatal(err)
 	}
 
+	albums, err := application.AlbumService.GetAllAlbum()
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("all album : %v\n", albums)
+
+	albumNo1, err := application.AlbumService.Get(albums[0].ID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("album number 1 : %v\n", albumNo1)
+
+	err = application.AlbumService.Create(&services.Album{
+		Title: "Mungkin Nanti", Artist: "Peterpan", Price: 70000,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("Success Create Album!")
+
 	albumNo1.Price = 70000
 	err = application.AlbumService.Update(*albumNo1)
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("Success update album %v\n", albumNo1)
 
 	err = application.AlbumService.Delete(albumNo1.ID)
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("Success delete id: %d!\n", albumNo1.ID)
+
+	for _, alb := range albums {
+		err = application.AlbumService.Delete(alb.ID)
+		log.Printf("error : %v", err)
+	}
+	log.Println("Success delete all data from table album")
+}
+
+func openDB(connString string, setLimits bool) (*sql.DB, error) {
+	var err error
+	db, err := sql.Open("sqlserver", connString)
+	if err != nil {
+		log.Fatal("Error creating connection pool: ", err.Error())
+	}
+
+	if setLimits {
+		fmt.Println("setting limits")
+		db.SetMaxIdleConns(5)
+		db.SetMaxOpenConns(5)
+	}
+
+	ctx := context.Background()
+	err = db.PingContext(ctx)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	fmt.Printf("Connected!\n")
+	return db, nil
 }
 ```
 
@@ -476,11 +561,11 @@ Perintah diatas digunakan untuk meload data konfigurasi dalam file `.env`. lalu 
 os.Getenv("<nama-konfigurasi>")
 ```
 
-Dalam hal ini kita menyimpan koneksi URL ke dalam database yang disimpan ke dalam environment sehingga kita perlu mengambil data konfigurasinya itu menggunakan perintah `os.Getenv("POSTGRES_URL")`.
+Dalam hal ini kita menyimpan koneksi URL ke dalam database yang disimpan ke dalam environment sehingga kita perlu mengambil data konfigurasinya itu menggunakan perintah `os.Getenv("MSSQL_URL")`.
 
 Selanjutnya kita inisialisasi koneksi ke dalam database.
 ```go
-db, err := openDB(os.Getenv("POSTGRES_URL"), true)
+db, err := openDB(os.Getenv("MSSQL_URL"), true)
 if err != nil {
   log.Fatalln(err)
 }
@@ -498,7 +583,7 @@ defer func(db *sql.DB) {
 
 Agar `service` kita melakukan akses pada main program maka kita perlu melakukan inisialisasi module `service`-nya. 
 ```go
-application := app{AlbumService: services.NewPostgresService(db)}
+application := app{AlbumService: services.NewMSSQLService(db)}
 ```
 
 Sisanya adalah pemanggilan fungsi-fungsi `service` yang sudah kita definisikan pada fungsi.
